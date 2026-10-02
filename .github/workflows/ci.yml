@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  end-to-end:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7.0.1
+
+      - name: Set up Python
+        uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+          cache: pip
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Start API and run end-to-end test
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m uvicorn backend.main:app --host 127.0.0.1 --port 8000 > api.log 2>&1 &
+          api_pid=$!
+          cleanup() {
+            kill "$api_pid" 2>/dev/null || true
+          }
+          trap cleanup EXIT
+          python - <<'PY'
+          import time
+          from urllib.request import urlopen
+
+          for _ in range(30):
+              try:
+                  with urlopen("http://127.0.0.1:8000/health", timeout=1) as response:
+                      if response.status == 200:
+                          break
+              except Exception:
+                  time.sleep(1)
+          else:
+              raise SystemExit("API did not become ready")
+          PY
+          python -m unittest discover -s tests -v
